@@ -317,5 +317,4 @@ sub main{
     }
 }
 
-my $mainRet = main();
-exit ($mainRet == 0) ? 0 : 1;
+main();
