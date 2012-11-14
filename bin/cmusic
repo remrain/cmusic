@@ -37,6 +37,10 @@ use Data::Dumper;
 use File::Copy;
 use Term::ANSIColor qw(:constants);
 $Term::ANSIColor::AUTORESET = 1;
+use threads;
+use threads::shared;
+
+my @searchMusics : shared;
 
 sub _initConf{
     my $yamlReader = new Tiny;
@@ -82,45 +86,40 @@ sub search{
 
 sub down{
     my @index = @_;
-    my $numOfSon = $cfg->{max_concurrent_download_process};
-    pipe PR, PW or return 1;
-    my $pr = *PR;
-    my $pw = *PW;
+    my $numOfThreads = $cfg->{max_concurrent_download_process};
+    open FH, $searchList or _error('Open search result failed!');
+    @searchMusics = <FH>;
+    close FH;
 
-    while ($numOfSon -- > 0){
-        my $pid = fork();
-        if ($pid < 0){
-            return 1;
-        }
-        elsif ($pid == 0){
-            _downProcess($pr, $pw);
-        }
+    my $pid = fork();
+    if ($pid < 0){
+        _error('fork failed!');
+    }
+    elsif ($pid > 0){
+        clean();
+        exit 0;
     }
 
-    close PR;
-    _downMaster($pr, $pw, @index);
-    close PW;
+    my @threads = ();
+    my $tid = 0;
+    for (1 .. $numOfThreads){
+        $tid = threads->create(\&_downProcess, $_);
+        push @threads, $tid;
+    }
+    for $tid (@threads){
+        $tid->join();
+    }
 }
 
-sub _downMaster{
-    my ($pr, $pw, @index) = @_;
-    my $i = 0;
-    open FH, $searchList or exit 1;
-
-    while (my $line = <FH>){
-        if (!@index || grep { $_ eq $i } @index){
-            syswrite PW, $line;
-        }
-        $i ++;
-    }
-    close FH;
-    clean();
+sub _getOneSearchSong{
+    lock(@searchMusics);
+    my $line = pop @searchMusics;
+    return $line;
 }
 
 sub _downProcess{
-    my ($pr, $pw) = @_;
-    close $pw;
-    while (my $line = <$pr>){
+    my ($i) = @_;
+    while (my $line = _getOneSearchSong()){
         chomp($line);
         my ($id, $name) = split("\t", $line);
         my $linkUrl = $cfg->{link} . $id;
@@ -128,9 +127,8 @@ sub _downProcess{
         my ($songLink) = $ret =~ m/"showLink":"([^"]*)/;
         $songLink =~ s/\\\//\//g;
         my $songFile = "$dataPath/$name.mp3";
-        _download_to_file($songLink, $songFile);
+        _download_to_file($songLink, $songFile, $i);
     }
-    exit;
 }
 
 sub _error{
@@ -198,8 +196,8 @@ sub _playVoice{
 }
 
 sub _download_to_file{
-    my ($url, $desFile) = @_;
-    my $tmpFile = "$tmpPath/$$.tmp.mp3";
+    my ($url, $desFile, $i) = @_;
+    my $tmpFile = "$tmpPath/$i.tmp.mp3";
     my @cmd = (
             'curl', '-s',
             $url,
