@@ -1,0 +1,3 @@
+search : http://music.baidu.com/search?size=20&key=
+link : http://music.baidu.com/data/music/songlink?type=mp3&rate=&songIds=
+offset_param : "&start="

@@ -1,0 +1,321 @@
+#!/usr/bin/perl -w
+my ($currentPath, $confPath, $tmpPath, $dataPath, $binPath, $logPath, $searchList, $cfg);
+my %funs = (
+    'l'      => 'list',
+    'list'   => 'list',
+    'p'      => 'play',
+    'play'   => 'play',
+    'down'   => 'down',
+    'd'      => 'down',
+    'search' => 'search',
+    's'      => 'search',
+    'clean'  => 'clean',
+    'c'      => 'clean',
+    'stop'   => 'stop',
+    'k'      => 'stop',
+    'help'   => 'help',
+);
+
+
+BEGIN {
+    use Cwd 'realpath';
+    $currentPath = __FILE__;
+    $currentPath =~ s/[^\/]+$//;
+    $currentPath = realpath("$currentPath/../");
+    $confPath = "$currentPath/conf/";
+    $dataPath = "$currentPath/data/";
+    $tmpPath = "$currentPath/cache/";
+    $binPath = "$currentPath/bin/";
+    $logPath = "$currentPath/log/";
+    $searchList = "$logPath/music_list";
+    push(@INC, "$currentPath/lib");
+}
+
+#use Getopt::Long;
+use Tiny;
+use Data::Dumper;
+use File::Copy;
+use Term::ANSIColor qw(:constants);
+$Term::ANSIColor::AUTORESET = 1;
+
+sub _initConf{
+    my $yamlReader = new Tiny;
+    my %cfgs = ();
+    my $tmp = ();
+    for my $file (glob "$confPath/*.yaml"){
+        $tmp = Tiny->read($file);
+        $tmp = $tmp->[0];
+        @cfgs{keys %{$tmp}} = values %{$tmp};
+    }
+    $cfg = \%cfgs;
+}
+
+sub search{
+    my ($keyword) = @_;
+    my $searchUrl = $cfg->{search} . _urlEncode($keyword);
+    my $tmpFile = "$tmpPath/search.html";
+    my @cmd = (
+        'curl', '-s',
+        $searchUrl,
+        '-o', $tmpFile
+    );
+    system(@cmd);
+    open FH, $tmpFile;
+    my $songs = ();
+    while (<FH>){
+        if (/<a href=.*data-songdata=.*title="/){
+            my ($id, $title) = m/ href=[^\d]*([\d]*).*title=['"]*([^'"]*)/;
+            $songs->{$title} = $id;
+        }
+    }
+    close FH;
+
+    my $i = 0;
+    open FH, ">$searchList";
+    for my $key(sort keys %{$songs}){
+        print FH $songs->{$key} . "\t" . _fileEncode($key) . "\n";
+        print YELLOW "$i\t$key\n";
+        $i ++;
+    }
+    close FH;
+}
+
+sub down{
+    my @index = @_;
+    my $numOfSon = $cfg->{max_concurrent_download_process};
+    pipe PR, PW or return 1;
+    my $pr = *PR;
+    my $pw = *PW;
+
+    while ($numOfSon -- > 0){
+        my $pid = fork();
+        if ($pid < 0){
+            return 1;
+        }
+        elsif ($pid == 0){
+            _downProcess($pr, $pw);
+        }
+    }
+
+    close PR;
+    _downMaster($pr, $pw, @index);
+    close PW;
+}
+
+sub _downMaster{
+    my ($pr, $pw, @index) = @_;
+    my $i = 0;
+    open FH, $searchList or exit 1;
+
+    while (my $line = <FH>){
+        if (!@index || grep { $_ eq $i } @index){
+            syswrite PW, $line;
+        }
+        $i ++;
+    }
+    close FH;
+    clean();
+}
+
+sub _downProcess{
+    my ($pr, $pw) = @_;
+    close $pw;
+    while (my $line = <$pr>){
+        chomp($line);
+        my ($id, $name) = split("\t", $line);
+        my $linkUrl = $cfg->{link} . $id;
+        my $ret = `curl -s '$linkUrl'`;
+        my ($songLink) = $ret =~ m/"showLink":"([^"]*)/;
+        $songLink =~ s/\\\//\//g;
+        my $songFile = "$dataPath/$name.mp3";
+        _download_to_file($songLink, $songFile);
+    }
+    exit;
+}
+
+sub _error{
+    my ($msg) = @_;
+    print STDERR "$msg\n";
+    exit 1;
+}
+
+sub play{
+    my ($index, $style) = @_;
+    my @ret = sort glob "$dataPath/*";
+    if (!@ret || (defined($index) && !defined($ret[$index]))){
+        _error('We do not have any music');
+    }
+    if (!defined($style)){
+        $style = $cfg->{default_play_style};
+    }
+    if (!defined($index)){
+        $index = _getIndex($index, $#ret, $style);
+    }
+
+    my $song = $ret[$index];
+    $song =~ s/^.*\///g;
+    $song =~ s/\.mp3$//g;
+    print BLUE "Now play: ";
+    print BOLD YELLOW "$song\n";
+
+    my $pid = fork();
+    if ($pid > 0){
+        return 0;
+    }
+    elsif ($pid < 0){
+        _error('fork failed');
+    }
+    else{
+        _kill();
+        while (1){
+            my $playRet = _playVoice($ret[$index]);
+
+            #SIGTERM or SIGKILL
+            if ($playRet == 15 || $playRet == 9){
+                last;
+            }
+            $index = _getIndex($index, $#ret, $style);
+        }
+    }
+}
+
+sub _getIndex{
+    my ($i, $len, $style) = @_;
+    if ($style eq 'random'){
+        $i = int(rand($len));
+    }
+    else{
+        $i = (($i + 1) >= $len ? 0 : $i + 1);
+    }
+    return $i;
+}
+
+sub _playVoice{
+    my ($song) = @_;
+    my $cmd = _getConf('mp3_file_play_cmd', $song);
+    my $ret = system($cmd);
+    return $ret;
+}
+
+sub _download_to_file{
+    my ($url, $desFile) = @_;
+    my $tmpFile = "$tmpPath/$$.tmp.mp3";
+    my @cmd = (
+            'curl', '-s',
+            $url,
+            '-o', $tmpFile
+            );
+    system(@cmd);
+    move($tmpFile, $desFile);
+}
+
+sub stop{
+    my $ret = _kill();
+    my $msg = ($ret == 0) ? 'Stop play success!' : 'Stop play failed!';
+    print BLUE "$msg\n";
+    return $ret;
+}
+
+sub _kill{
+    my $process = $cfg->{player_process};
+    `ps aux |grep $process |grep -v grep |awk '{print \$2}' |xargs kill >/dev/null 2>&1`;
+    return $?;
+}
+
+sub clean{
+    unlink($searchList);
+}
+
+sub _getConf{
+    my ($key, @params) = @_;
+    my $ret = $cfg->{$key};
+    for my $param (@params){
+        $ret =~ s/<\$[^\$]*\$>/$param/;
+    }
+    return $ret;
+}
+
+sub _getSearchResult{
+    my %songs = ();
+    if (!open(FH, $searchList)){
+        return \%songs;
+    }
+    while (my $line = <FH>){
+        chomp($line);
+        my ($id, $name) = split("\t", $line);
+        $songs{$name} = $id;
+    }
+    close FH;
+    return \%songs;
+}
+
+sub _getLocalSongs{
+    my %songs = ();
+    my @files = glob "$dataPath/*";
+    for my $file(@files){
+        my ($name) = $file =~ m/([^\/]*)$/;
+        $name =~ s/\.mp3//g;
+        $songs{$name} = $file;
+    }
+    return \%songs;
+}
+
+sub list{
+    my $searchSongs = _getSearchResult();
+    my $localSongs = _getLocalSongs();
+    my $i = 0;
+    my $name;
+    for $name(sort keys %{$searchSongs}){
+        print YELLOW "$i\t" . $name . "\n";
+        $i ++;
+    }
+    for $name(sort keys %{$localSongs}){
+        print "$i\t" . $name . "\n";
+        $i ++;
+    }
+}
+
+sub _urlEncode{
+    my ($str) = @_;
+    $str =~ s/[\s]*$//g;
+    $str =~ s/^[\s]*//g;
+    $str =~ s/[\s]/+/g;
+    return $str;
+}
+
+sub _fileEncode(){
+    my ($str) = @_;
+    $str =~ s/[\s]*$//g;
+    $str =~ s/^[\s]*//g;
+    $str =~ s/[\s]/_/g;
+    return $str;
+}
+
+sub help{
+    print "CMusic, search music and play it, enjoy!\n";
+    print "Useage: cmusic [options][args]\n\n";
+    print "Options:\n";
+    print "search|s <keywords>    Search music by keywords. Example: cm search beyond\n";
+    print "clean|c                Clean search result\n";
+    print "list|l                 List all songs\n";
+    print "down|d [index]         Download music. Cmusic will download all songs if index is not set. Example: cm down 11\n";
+    print "play|p [index][style]  Play music, style can be random/order (default random). Example: cm play 9 order\n";
+    print "stop|k                 Stop play music\n";
+    print "help                   Show this message\n";
+    print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n"
+}
+
+sub main{
+    my $action = shift(@ARGV);
+    _initConf();
+    if ($action && defined($funs{$action})){
+        my $method = $funs{$action};
+        return $method->(@ARGV);
+    }
+    else{
+        return help();
+    }
+}
+
+my $mainRet = main();
+exit ($mainRet == 0) ? 0 : 1;
