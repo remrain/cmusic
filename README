@@ -1,4 +1,61 @@
 cmusic
 ======
-
 CMusic, search, download music from internat and play it
+
+
+
+=========
+DOWNLOAD
+=========
+$ git clone https://github.com/remrain/cmusic.git
+
+
+
+=============
+INSTALLATION
+=============
+First, set your player
+
+$ cd cmusic
+$ vi conf/cmusic.yaml
+
+If you do not have mplayer, set you player by modify mp3_file_play_cmd, player_process
+
+
+Then add cmusic/bin to PATH
+
+$ PATH=$PATH:/your/path/to/cmusic/bin
+$ echo "PATH=$PATH:/your/path/to/cmusic/bin" >> ~/.bash_profile
+
+
+
+
+============
+LET'S PLAY
+============
+$ cmusic search 'seasons in the sun'
+$ cmusic down 0                     #download first song
+
+$ cmusic search beyond
+$ cmusic down                       # download all songs
+$ cmusic list                       # list all downloaded songs
+$ cmusic play 3                     # play the third song
+$ cmusic stop                       # stop play
+$ cmusic play                       # stop current player, and play next song
+
+
+
+======
+TODO
+======
+* show downloading status
+* show search result of next page
+* create index to manage all songs
+
+
+
+========
+CONTACT
+========
+Mail bug reports and suggestions to <chenyaosf@gmail.com>.
+

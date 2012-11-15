@@ -293,11 +293,11 @@ sub help{
     print "CMusic, search music and play it, enjoy!\n";
     print "Useage: cmusic [options][args]\n\n";
     print "Options:\n";
-    print "search|s <keywords>    Search music by keywords. Example: cm search beyond\n";
+    print "search|s <keywords>    Search music by keywords. Example: cmusic search beyond\n";
     print "clean|c                Clean search result\n";
     print "list|l                 List all songs\n";
-    print "down|d [index]         Download music. Cmusic will download all songs if index is not set. Example: cm down 11\n";
-    print "play|p [index][style]  Play music, style can be random/order (default random). Example: cm play 9 order\n";
+    print "down|d [index]         Download music. Cmusic will download all songs if index is not set. Example: cmusic down 11\n";
+    print "play|p [index][style]  Play music, style can be random/order (default random). Example: cmusic play 9 order\n";
     print "stop|k                 Stop play music\n";
     print "help                   Show this message\n";
     print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n"

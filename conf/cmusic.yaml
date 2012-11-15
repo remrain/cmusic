@@ -5,7 +5,7 @@ default_play_style : random
 
 #how to play mp3, <$PARAM$> will be replaced to file or url
 mp3_file_play_cmd : "mplayer '<$FILE$>' -msglevel all=-1 </dev/null >/dev/null 2>&1"
-mp3_link_play_cmd : "mplayer '<$LINK$>' -msglevel all=-1 </dev/null >/dev/null 2>&1"
+#mp3_link_play_cmd : "mplayer '<$LINK$>' -msglevel all=-1 </dev/null >/dev/null 2>&1"
 
 #kill which process to stop play
 player_process : mplayer
