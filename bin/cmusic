@@ -6,27 +6,42 @@ BEGIN {
     chdir(dirname(realpath(__FILE__)) . '/../');
     unshift(@INC, 'lib');
     $SIG{TERM} = \&kill_and_exit;
+    $0 = 'cmusic';
 }
 
 use POSIX ":sys_wait_h";
 use threads;
 use threads::shared;
+use Term::ANSIColor qw(:constants);
+$Term::ANSIColor::AUTORESET = 1;
 use Encode;
 use LWP::UserAgent;
 use JSON;
 use Data::Dumper;
 
-our ($channel_file, $channel_id_file, $pid_file) = map { "$ENV{HOME}/.cmusic/$_" } qw(channels channel_id cmusic.pid);
-our ($channel_id, $config);
-our %songs :shared = ();
-our @playlist :shared = ();
-our $player_pid :shared = 0;
+our (
+    $channel_id,
+    $config,
+    $channel_file,
+    $channel_id_file,
+    $pid_file,
+    %songs,
+    @playlist,
+    $player_pid
+);
 
 sub init{
+    # Set .cmusic directory
+    my $user_path = "$ENV{HOME}/.cmusic/";
+    -d $user_path or mkdir $user_path;
+    ($channel_file, $channel_id_file, $pid_file) = map { "$user_path/$_" } qw(channels channel_id cmusic.pid);
+
     # Read config
     $config = from_jsonfile('conf/cmusic.json');
+
+    # Set channel id
     $channel_id = file_get_contents($channel_id_file);
-    $channel_id or $channel_id = 'public_tuijian_billboard';
+    $channel_id or $channel_id = $config->{default_channel_id};
 }
 
 sub from_jsonfile{
@@ -88,14 +103,12 @@ sub refresh_playlist{
 }
 
 sub add_playlist{
-    lock(@playlist);
     push(@playlist, @_);
 }
 
 sub get_playlist{
     my ($count) = @_;
     my @list = ();
-    lock(@playlist);
     for (1 .. $count){
         @playlist or last;
         my $one = shift(@playlist);
@@ -106,7 +119,6 @@ sub get_playlist{
 
 sub is_playlist_empty{
     my ($count) = @_;
-    lock(@playlist);
     return (@playlist < $count);
 }
 
@@ -123,19 +135,16 @@ sub refresh_songs{
 
 sub add_song{
     my %song_hash = @_;
-    lock(%songs);
     for my $key (keys %song_hash){
         $songs{$key} = $song_hash{$key};
     }
 }
 
 sub is_songs_empty{
-    lock(%songs);
     return (keys(%songs) == 0);
 }
 
 sub get_song{
-    lock(%songs);
     my ($id, $url) = each %songs;
     delete $songs{$id};
     return ($id, $url);
@@ -216,7 +225,8 @@ sub help{
 }
 
 sub daemon{
-    if (fork() == 0){ 
+    my $pid = fork();
+    if ($pid == 0){ 
         #umask 0;
         POSIX::setsid();
         close STDIN;
@@ -225,8 +235,10 @@ sub daemon{
         open STDIN, '/dev/null';
         open STDOUT, '+>/dev/null';
         open STDERR, '+>/dev/null';
-    } else {
+    } elsif ($pid > 0) {
         exit 0;
+    } else {
+        exit 1;
     }
 }
 
