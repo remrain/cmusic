@@ -1,318 +1,234 @@
 #!/usr/bin/perl -w
-my ($currentPath, $confPath, $tmpPath, $dataPath, $binPath, $logPath, $searchList, $cfg);
-my %funs = (
-    'l'      => 'list',
-    'list'   => 'list',
-    'p'      => 'play',
-    'play'   => 'play',
-    'down'   => 'down',
-    'd'      => 'down',
-    'search' => 'search',
-    's'      => 'search',
-    'clean'  => 'clean',
-    'c'      => 'clean',
-    'stop'   => 'stop',
-    'k'      => 'stop',
-    'help'   => 'help',
-);
-
 
 BEGIN {
     use Cwd 'realpath';
-    $currentPath = __FILE__;
-    $currentPath =~ s/[^\/]+$//;
-    $currentPath = realpath("$currentPath/../");
-    $confPath = "$currentPath/conf/";
-    $dataPath = "$currentPath/data/";
-    $tmpPath = "$currentPath/cache/";
-    $binPath = "$currentPath/bin/";
-    $logPath = "$currentPath/log/";
-    $searchList = "$logPath/music_list";
-    push(@INC, "$currentPath/lib");
+    use File::Basename;
+    chdir(dirname(realpath(__FILE__)) . '/../');
+    unshift(@INC, 'lib');
+    $SIG{TERM} = \&kill_and_exit;
 }
 
-#use Getopt::Long;
-use Tiny;
-use Data::Dumper;
-use File::Copy;
-use Term::ANSIColor qw(:constants);
-$Term::ANSIColor::AUTORESET = 1;
+use POSIX ":sys_wait_h";
 use threads;
 use threads::shared;
+use Encode;
+use LWP::UserAgent;
+use JSON;
+use Data::Dumper;
 
-my @searchMusics : shared;
+our ($channel_file, $channel_id_file, $pid_file) = map { "$ENV{HOME}/.cmusic/$_" } qw(channels channel_id cmusic.pid);
+our ($channel_id, $config);
+our %songs :shared = ();
+our @playlist :shared = ();
+our $player_pid :shared = 0;
 
-sub _initConf{
-    my $yamlReader = new Tiny;
-    my %cfgs = ();
-    my $tmp = ();
-    for my $file (glob "$confPath/*.yaml"){
-        $tmp = Tiny->read($file);
-        $tmp = $tmp->[0];
-        @cfgs{keys %{$tmp}} = values %{$tmp};
-    }
-    $cfg = \%cfgs;
+sub init{
+    # Read config
+    $config = from_jsonfile('conf/cmusic.json');
+    $channel_id = file_get_contents($channel_id_file);
+    $channel_id or $channel_id = 'public_tuijian_billboard';
 }
 
-sub search{
-    my ($keyword) = @_;
-    my $searchUrl = $cfg->{search} . _urlEncode($keyword);
-    my $tmpFile = "$tmpPath/search.html";
-    my @cmd = (
-        'curl', '-s',
-        $searchUrl,
-        '-o', $tmpFile
-    );
-    system(@cmd);
-    open FH, $tmpFile;
-    my $songs = ();
-    while (<FH>){
-        if (/<a href=.*data-songdata=.*title="/){
-            my ($id, $title) = m/ href=[^\d]*([\d]*).*title=['"]*([^'"]*)/;
-            $songs->{$title} = $id;
-        }
-    }
-    close FH;
-
-    my $i = 0;
-    open FH, ">$searchList";
-    for my $key(sort keys %{$songs}){
-        print FH $songs->{$key} . "\t" . _fileEncode($key) . "\n";
-        print YELLOW "$i\t$key\n";
-        $i ++;
-    }
-    close FH;
+sub from_jsonfile{
+    my ($file) = @_;
+    my $json = file_get_contents($file) or return undef;
+    return JSON->new->utf8->decode($json);
 }
 
-sub down{
-    my @index = @_;
-    my $numOfThreads = $cfg->{max_concurrent_download_process};
-    open FH, $searchList or _error('Open search result failed!');
-    @searchMusics = <FH>;
-    close FH;
-
-    my $pid = fork();
-    if ($pid < 0){
-        _error('fork failed!');
+sub file_get_contents{
+    my ($file) = @_;
+    open(my $fh, $file) or return undef;
+    my $contents = '';
+    while (<$fh>){
+        $contents.= $_;
     }
-    elsif ($pid > 0){
-        clean();
-        exit 0;
-    }
-
-    my @threads = ();
-    my $tid = 0;
-    for (1 .. $numOfThreads){
-        $tid = threads->create(\&_downProcess, $_);
-        push @threads, $tid;
-    }
-    for $tid (@threads){
-        $tid->join();
-    }
+    close $fh;
+    return $contents;
 }
 
-sub _getOneSearchSong{
-    lock(@searchMusics);
-    my $line = pop @searchMusics;
-    return $line;
+sub file_put_contents{
+    my ($file, $contents) = @_;
+    open(my $fh, '>', $file) or return 0;
+    print $fh $contents;
+    close($fh);
 }
 
-sub _downProcess{
-    my ($i) = @_;
-    while (my $line = _getOneSearchSong()){
-        chomp($line);
-        my ($id, $name) = split("\t", $line);
-        my $linkUrl = $cfg->{link} . $id;
-        my $ret = `curl -s '$linkUrl'`;
-        my ($songLink) = $ret =~ m/"showLink":"([^"]*)/;
-        $songLink =~ s/\\\//\//g;
-        my $songFile = "$dataPath/$name.mp3";
-        _download_to_file($songLink, $songFile, $i);
-    }
+sub set_channel{
+    my ($index) = @_;
+    my $channel = from_jsonfile($channel_file) or refresh_channel();
+    $channel_id = $channel->{channel_list}->[$index]->{channel_id};
+    file_put_contents($channel_id_file, $channel_id);
 }
 
-sub _error{
-    my ($msg) = @_;
-    print STDERR "$msg\n";
-    exit 1;
+sub http_get{
+    my ($url) = @_;
+    my $ua = LWP::UserAgent->new;
+    $ua->agent('cmusic 2.0');
+    $ua->timeout(10);
+    $ua->env_proxy;
+    my $res = $ua->get($url);
+    return ($res->is_success) ? $res->content : '';
 }
 
-sub play{
-    my ($index, $style) = @_;
-    my @ret = sort glob "$dataPath/*";
-    if (!@ret || (defined($index) && !defined($ret[$index]))){
-        _error('We do not have any music');
-    }
-    if (!defined($style)){
-        $style = $cfg->{default_play_style};
-    }
-    if (!defined($index)){
-        $index = _getIndex($index, $#ret, $style);
-    }
+sub refresh_channel{
+    my $html = http_get($config->{channel_list});
+    ($html) = grep(/rawChannelList/, split("\n", $html));
+    my ($json) = $html =~ m/(\{.*\})/;
+    file_put_contents($channel_file, $json);
+    my $channel = JSON->new->utf8->decode($json);
+    return $channel;
+}
 
-    my $song = $ret[$index];
-    $song =~ s/^.*\///g;
-    $song =~ s/\.mp3$//g;
-    print BLUE "Now play: ";
-    print BOLD YELLOW "$song\n";
+sub refresh_playlist{
+    my $json = http_get($config->{playlist} . $channel_id);
+    my $data = JSON->new->utf8->decode($json);
+    my $list = $data->{list};
+    my @list_id = map { $_->{id} } @$list;
+    add_playlist(@list_id);
+}
 
-    my $pid = fork();
-    if ($pid > 0){
-        return 0;
-    }
-    elsif ($pid < 0){
-        _error('fork failed');
-    }
-    else{
-        _kill();
-        while (1){
-            my $playRet = _playVoice($ret[$index]);
+sub add_playlist{
+    lock(@playlist);
+    push(@playlist, @_);
+}
 
-            #SIGTERM or SIGKILL
-            if ($playRet == 15 || $playRet == 9){
-                last;
-            }
-            $index = _getIndex($index, $#ret, $style);
-        }
+sub get_playlist{
+    my ($count) = @_;
+    my @list = ();
+    lock(@playlist);
+    for (1 .. $count){
+        @playlist or last;
+        my $one = shift(@playlist);
+        push(@list, $one);
+    }
+    return @list;
+}
+
+sub is_playlist_empty{
+    my ($count) = @_;
+    lock(@playlist);
+    return (@playlist < $count);
+}
+
+sub refresh_songs{
+    my ($count) = @_;
+    is_playlist_empty($count) and refresh_playlist();
+    my $song_ids = join(',', get_playlist($count));
+    my $json = http_get($config->{songs} . $song_ids);
+    my $data = JSON->new->utf8->decode($json);
+    my $song_list = $data->{data}->{songList};
+    my %song_hash = map { ($_->{songId}, $_->{showLink}) } @$song_list;
+    add_song(%song_hash);
+}
+
+sub add_song{
+    my %song_hash = @_;
+    lock(%songs);
+    for my $key (keys %song_hash){
+        $songs{$key} = $song_hash{$key};
     }
 }
 
-sub _getIndex{
-    my ($i, $len, $style) = @_;
-    if ($style eq 'random'){
-        $i = int(rand($len));
+sub is_songs_empty{
+    lock(%songs);
+    return (keys(%songs) == 0);
+}
+
+sub get_song{
+    lock(%songs);
+    my ($id, $url) = each %songs;
+    delete $songs{$id};
+    return ($id, $url);
+}
+
+sub play_song{
+    is_songs_empty() and refresh_songs(10);
+    my ($id, $url) = get_song();
+    _player($url);
+}
+
+sub _player{
+    my ($url) = @_;
+    my $cmd = $config->{play_cmd};
+    $player_pid = fork();
+    if ($player_pid > 0){
+        wait;
+    } elsif ($player_pid == 0){
+        exec(@$cmd, $url);
     }
-    else{
-        $i = (($i + 1) >= $len ? 0 : $i + 1);
-    }
-    return $i;
-}
-
-sub _playVoice{
-    my ($song) = @_;
-    my $cmd = _getConf('mp3_file_play_cmd', $song);
-    my $ret = system($cmd);
-    return $ret;
-}
-
-sub _download_to_file{
-    my ($url, $desFile, $i) = @_;
-    my $tmpFile = "$tmpPath/$i.tmp.mp3";
-    my @cmd = (
-            'curl', '-s',
-            $url,
-            '-o', $tmpFile
-            );
-    system(@cmd);
-    move($tmpFile, $desFile);
-}
-
-sub stop{
-    my $ret = _kill();
-    my $msg = ($ret == 0) ? 'Stop play success!' : 'Stop play failed!';
-    print BLUE "$msg\n";
-    return $ret;
-}
-
-sub _kill{
-    my $process = $cfg->{player_process};
-    `ps aux |grep $process |grep -v grep |awk '{print \$2}' |xargs kill >/dev/null 2>&1`;
-    return $?;
-}
-
-sub clean{
-    unlink($searchList);
-}
-
-sub _getConf{
-    my ($key, @params) = @_;
-    my $ret = $cfg->{$key};
-    for my $param (@params){
-        $ret =~ s/<\$[^\$]*\$>/$param/;
-    }
-    return $ret;
-}
-
-sub _getSearchResult{
-    my %songs = ();
-    if (!open(FH, $searchList)){
-        return \%songs;
-    }
-    while (my $line = <FH>){
-        chomp($line);
-        my ($id, $name) = split("\t", $line);
-        $songs{$name} = $id;
-    }
-    close FH;
-    return \%songs;
-}
-
-sub _getLocalSongs{
-    my %songs = ();
-    my @files = glob "$dataPath/*";
-    for my $file(@files){
-        my ($name) = $file =~ m/([^\/]*)$/;
-        $name =~ s/\.mp3//g;
-        $songs{$name} = $file;
-    }
-    return \%songs;
-}
-
-sub list{
-    my $searchSongs = _getSearchResult();
-    my $localSongs = _getLocalSongs();
-    my $i = 0;
-    my $name;
-    for $name(sort keys %{$searchSongs}){
-        print YELLOW "$i\t" . $name . "\n";
-        $i ++;
-    }
-    for $name(sort keys %{$localSongs}){
-        print "$i\t" . $name . "\n";
-        $i ++;
-    }
-}
-
-sub _urlEncode{
-    my ($str) = @_;
-    $str =~ s/[\s]*$//g;
-    $str =~ s/^[\s]*//g;
-    $str =~ s/[\s]/+/g;
-    return $str;
-}
-
-sub _fileEncode(){
-    my ($str) = @_;
-    $str =~ s/[\s]*$//g;
-    $str =~ s/^[\s]*//g;
-    $str =~ s/[\s]/_/g;
-    return $str;
-}
-
-sub help{
-    print "CMusic, search music and play it, enjoy!\n";
-    print "Useage: cmusic [options][args]\n\n";
-    print "Options:\n";
-    print "search|s <keywords>    Search music by keywords. Example: cmusic search beyond\n";
-    print "clean|c                Clean search result\n";
-    print "list|l                 List all songs\n";
-    print "down|d [index]         Download music. Cmusic will download all songs if index is not set. Example: cmusic down 11\n";
-    print "play|p [index][style]  Play music, style can be random/order (default random). Example: cmusic play 9 order\n";
-    print "stop|k                 Stop play music\n";
-    print "help                   Show this message\n";
-    print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n"
 }
 
 sub main{
     my $action = shift(@ARGV);
-    _initConf();
-    if ($action && defined($funs{$action})){
-        my $method = $funs{$action};
-        return $method->(@ARGV);
-    }
-    else{
+    my %funs = (
+        'list|l'   => 'list',
+        'play|p'   => 'play',
+        'stop|k'   => 'stop',
+        'help'     => 'help',
+    );
+    if ($action and my ($key) = grep { $action =~ /^($_)$/; } keys %funs){
+        return $funs{$key}->(@ARGV);
+    } else {
         return help();
     }
 }
 
+sub list{
+    my $channel = refresh_channel()->{channel_list};
+    my $i = 0;
+    for (@$channel){
+        printf("%2d\t%s\n", $i, encode_utf8($_->{channel_name}));
+        $i ++;
+    }
+}
+
+sub play{
+    @_ and set_channel(@_);
+    stop();
+    daemon();
+    file_put_contents($pid_file, $$);
+    while (1){
+        play_song();
+    }
+}
+
+sub stop{
+    my $pid = file_get_contents($pid_file);
+    if (kill(0, $pid)){
+        kill(SIGTERM, $pid);
+    }
+}
+
+sub kill_and_exit{
+    $player_pid and kill(SIGTERM, $player_pid);
+    exit(0);
+}
+
+sub help{
+    print "CMusic 2.0, play online music, enjoy!\n";
+    print "Useage: cmusic [options][args]\n\n";
+    print "Options:\n";
+    print "list|l                  List all channels\n";
+    print "play|p [channel_index]  Start playing music\n";
+    print "stop|k                  Stop play\n";
+    print "help                    Show this message\n";
+    print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n";
+}
+
+sub daemon{
+    if (fork() == 0){ 
+        #umask 0;
+        POSIX::setsid();
+        close STDIN;
+        close STDOUT;
+        close STDERR;
+        open STDIN, '/dev/null';
+        open STDOUT, '+>/dev/null';
+        open STDERR, '+>/dev/null';
+    } else {
+        exit 0;
+    }
+}
+
+init();
 main();
