@@ -96,11 +96,14 @@ sub set_channel{
 }
 
 sub http_get{
-    my ($url) = @_;
+    my ($url, $param) = @_;
     my $ua = LWP::UserAgent->new;
     $ua->agent('cmusic 2.0');
     $ua->timeout(10);
     $ua->env_proxy;
+    while (my ($key, $value) = each %$param){
+        $url.= "&$key=$value";
+    }
     my $res = $ua->get($url);
     return ($res->is_success) ? $res->content : '';
 }
@@ -115,7 +118,9 @@ sub refresh_channel{
 }
 
 sub refresh_playlist{
-    my $json = http_get($config->{playlist} . $channel_id);
+    my $json = http_get($config->{playlist}, {
+        id => $channel_id
+    });
     my $data = JSON->new->utf8->decode($json);
     my $list = $data->{list};
     my @list_id = map { $_->{id} } @$list;
@@ -146,7 +151,10 @@ sub refresh_songs{
     my ($count) = @_;
     is_playlist_empty($count) and refresh_playlist();
     my $song_ids = join(',', get_playlist($count));
-    my $json = http_get($config->{songs} . $song_ids);
+    my $json = http_get($config->{songs}, {
+        rate => $config->{rate},
+        songIds => $song_ids
+    });
     my $data = JSON->new->utf8->decode($json);
     my $song_list = $data->{data}->{songList};
     add_song(@$song_list);

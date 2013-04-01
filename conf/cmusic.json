@@ -1,7 +1,8 @@
 {
     "channel_list" : "http://fm.baidu.com",
-    "playlist" : "http://fm.baidu.com/dev/api/?tn=playlist&special=flash&prepend=&format=json&id=",
-    "songs" : "http://music.baidu.com/data/music/fmlink?type=mp3&rate=128&songIds=",
+    "playlist" : "http://fm.baidu.com/dev/api/?tn=playlist&special=flash&prepend=&format=json",
+    "songs" : "http://music.baidu.com/data/music/fmlink?type=mp3",
+    "rate" : 128,
     "default_channel_id" : "public_tuijian_billboard",
     "play_cmd" : ["mplayer"]
 }
