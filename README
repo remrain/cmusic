@@ -39,8 +39,10 @@ LET'S PLAY
 ============
 $ cmusic list                      # list all channels
 $ cmusic play 2                    # play channel 2
+$ cmusic like                      # i like current song, cmusic will mark it
 $ cmusic show                      # show name, artist, etc of current song
 $ cmusic play                      # play next song
+$ cmusic bore                      # current song is boring, do not play it any more
 $ cmusic stop                      # stop player
 
 

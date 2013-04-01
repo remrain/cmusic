@@ -24,7 +24,10 @@ our (
     $channel_id_file,
     $pid_file,
     $song_file,
+    $like_file,
+    $bore_file,
     %songs,
+    %bore_songs,
     @playlist,
     $player_pid
 );
@@ -33,7 +36,14 @@ sub init{
     # Set .cmusic directory
     my $user_path = "$ENV{HOME}/.cmusic/";
     -d $user_path or mkdir $user_path;
-    ($channel_file, $channel_id_file, $song_file, $pid_file) = map { "$user_path/$_" } qw(channels channel_id song_detail cmusic.pid);
+    (
+        $channel_file,
+        $channel_id_file,
+        $song_file,
+        $like_file,
+        $bore_file,
+        $pid_file
+    ) = map { "$user_path/$_" } qw(channels channel_id song_detail like_songs bore_songs cmusic.pid);
 
     # Read config
     $config = from_jsonfile('conf/cmusic.json');
@@ -41,6 +51,14 @@ sub init{
     # Set channel id
     $channel_id = file_get_contents($channel_id_file);
     $channel_id or $channel_id = $config->{default_channel_id};
+
+    # Refresh boring songs
+    refresh_bore_songs();
+}
+
+sub refresh_bore_songs{
+    my $bore = from_jsonfile($bore_file);
+    %bore_songs = %$bore;
 }
 
 sub from_jsonfile{
@@ -153,7 +171,15 @@ sub play_song{
     is_songs_empty() and refresh_songs(10);
     my $song = get_song();
     to_jsonfile($song_file, $song);
-    _player($song->{showLink});
+    if (!is_bore_song($song)){
+        _player($song->{showLink});
+    }
+}
+
+sub is_bore_song{
+    my ($song) = @_;
+    my $song_id = $song->{songId};
+    return exists($bore_songs{$song_id});
 }
 
 sub _player{
@@ -174,6 +200,8 @@ sub main{
         'play|p'   => 'play',
         'stop|k'   => 'stop',
         'show|s'   => 'show',
+        'like|i'   => 'like',
+        'bore|b'   => 'bore',
         'help'     => 'help',
     );
     if ($action and my ($key) = grep { $action =~ /^($_)$/; } keys %funs){
@@ -183,8 +211,42 @@ sub main{
     }
 }
 
-sub show{
+sub like{
+    my $song = check_song_file("Which song do you like?");
+    append_song_file($like_file, $song);
+    printf("We like %s - %s\n", encode_utf8($song->{songName}), encode_utf8($song->{artistName}));
+}
+
+sub bore{
+    my $song = check_song_file("Which song bored you?");
+    append_song_file($bore_file, $song);
+    printf("Never play %s - %s\n", encode_utf8($song->{songName}), encode_utf8($song->{artistName}));
+    refresh_bore_songs();
+    play();
+}
+
+sub append_song_file{
+    my ($file, $one) = @_;
+    my $songs = from_jsonfile($file);
+    $songs->{$one->{songId}} = {
+        name   => $one->{songName},
+        artist => $one->{artistName}
+    };
+    to_jsonfile($file, $songs);
+}
+
+sub check_song_file{
+    my ($msg) = @_;
     my $song = from_jsonfile($song_file);
+    if (!$song){
+        print "$msg\n";
+        exit 1;
+    }
+    return $song;
+}
+
+sub show{
+    my $song = check_song_file("Play song first!");
     my $detail = "%s:\nAlbum:\t%s\nName:\t%s\nArtist:\t%s\nRate:\t%skbps\nSize:\t%.2fM\nTime:\t%.2fmin\n";
     if ($song){
         printf($detail,
@@ -245,6 +307,8 @@ sub help{
     print "play|p [channel_index]  Start playing music\n";
     print "stop|k                  Stop play\n";
     print "show|s                  Show details of current song\n";
+    print "like|i                  I like current song\n";
+    print "bore|b                  Current song is boring\n";
     print "help                    Show this message\n";
     print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n";
 }
