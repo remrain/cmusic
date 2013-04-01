@@ -22,6 +22,9 @@ $ vi conf/cmusic.json
 If you do not have mplayer, set you player by modify play_cmd, example:
 "play_cmd" : ["player", "-mp3", "-url"]
 
+And you can set mp3 rate by modify 'songs', example:
+"songs" : "http://music.baidu.com/data/music/fmlink?type=mp3&rate=64&songIds="
+
 
 Then add cmusic/bin to PATH
 
@@ -36,6 +39,7 @@ LET'S PLAY
 ============
 $ cmusic list                      # list all channels
 $ cmusic play 2                    # play channel 2
+$ cmusic show                      # show name, artist, etc of current song
 $ cmusic play                      # play next song
 $ cmusic stop                      # stop player
 

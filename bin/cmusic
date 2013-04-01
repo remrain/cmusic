@@ -10,8 +10,6 @@ BEGIN {
 }
 
 use POSIX ":sys_wait_h";
-use threads;
-use threads::shared;
 use Term::ANSIColor qw(:constants);
 $Term::ANSIColor::AUTORESET = 1;
 use Encode;
@@ -25,6 +23,7 @@ our (
     $channel_file,
     $channel_id_file,
     $pid_file,
+    $song_file,
     %songs,
     @playlist,
     $player_pid
@@ -34,7 +33,7 @@ sub init{
     # Set .cmusic directory
     my $user_path = "$ENV{HOME}/.cmusic/";
     -d $user_path or mkdir $user_path;
-    ($channel_file, $channel_id_file, $pid_file) = map { "$user_path/$_" } qw(channels channel_id cmusic.pid);
+    ($channel_file, $channel_id_file, $song_file, $pid_file) = map { "$user_path/$_" } qw(channels channel_id song_detail cmusic.pid);
 
     # Read config
     $config = from_jsonfile('conf/cmusic.json');
@@ -48,6 +47,12 @@ sub from_jsonfile{
     my ($file) = @_;
     my $json = file_get_contents($file) or return undef;
     return JSON->new->utf8->decode($json);
+}
+
+sub to_jsonfile{
+    my ($file, $perl_scalar) = @_;
+    my $json = JSON->new->utf8->encode($perl_scalar);
+    file_put_contents($file, $json);
 }
 
 sub file_get_contents{
@@ -129,31 +134,26 @@ sub refresh_songs{
     my $json = http_get($config->{songs} . $song_ids);
     my $data = JSON->new->utf8->decode($json);
     my $song_list = $data->{data}->{songList};
-    my %song_hash = map { ($_->{songId}, $_->{showLink}) } @$song_list;
-    add_song(%song_hash);
+    add_song(@$song_list);
 }
 
 sub add_song{
-    my %song_hash = @_;
-    for my $key (keys %song_hash){
-        $songs{$key} = $song_hash{$key};
-    }
+    push(@songs, @_);
 }
 
 sub is_songs_empty{
-    return (keys(%songs) == 0);
+    return (@songs == 0);
 }
 
 sub get_song{
-    my ($id, $url) = each %songs;
-    delete $songs{$id};
-    return ($id, $url);
+    return shift @songs;
 }
 
 sub play_song{
     is_songs_empty() and refresh_songs(10);
-    my ($id, $url) = get_song();
-    _player($url);
+    my $song = get_song();
+    to_jsonfile($song_file, $song);
+    _player($song->{showLink});
 }
 
 sub _player{
@@ -173,12 +173,31 @@ sub main{
         'list|l'   => 'list',
         'play|p'   => 'play',
         'stop|k'   => 'stop',
+        'show|s'   => 'show',
         'help'     => 'help',
     );
     if ($action and my ($key) = grep { $action =~ /^($_)$/; } keys %funs){
         return $funs{$key}->(@ARGV);
     } else {
         return help();
+    }
+}
+
+sub show{
+    my $song = from_jsonfile($song_file);
+    my $detail = "%s:\nAlbum:\t%s\nName:\t%s\nArtist:\t%s\nRate:\t%skbps\nSize:\t%.2fM\nTime:\t%.2fmin\n";
+    if ($song){
+        printf($detail,
+            get_player_pid() ? 'We are playing' : 'Last song',
+            encode_utf8($song->{albumName}),
+            encode_utf8($song->{songName}),
+            encode_utf8($song->{artistName}),
+            $song->{rate},
+            ($song->{size} / 1024 / 1024),
+            ($song->{time} / 60)
+        );
+    } else {
+        print "No details of song!\n";
     }
 }
 
@@ -201,9 +220,14 @@ sub play{
     }
 }
 
-sub stop{
+sub get_player_pid{
     my $pid = file_get_contents($pid_file);
-    if (kill(0, $pid)){
+    return (kill(0, $pid)) ? $pid : 0;
+}
+
+sub stop{
+    my $pid = get_player_pid();
+    if ($pid){
         kill(SIGTERM, $pid);
     }
 }
@@ -220,6 +244,7 @@ sub help{
     print "list|l                  List all channels\n";
     print "play|p [channel_index]  Start playing music\n";
     print "stop|k                  Stop play\n";
+    print "show|s                  Show details of current song\n";
     print "help                    Show this message\n";
     print "\n\nMail bug reports and suggestions to <chenyaosf\@gmail.com>.\n";
 }
