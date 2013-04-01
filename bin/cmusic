@@ -51,14 +51,11 @@ sub init{
     # Set channel id
     $channel_id = file_get_contents($channel_id_file);
     $channel_id or $channel_id = $config->{default_channel_id};
-
-    # Refresh boring songs
-    refresh_bore_songs();
 }
 
 sub refresh_bore_songs{
     my $bore = from_jsonfile($bore_file);
-    %bore_songs = %$bore;
+    %bore_songs = map { ($_, $bore->{$_}) } keys %$bore;
 }
 
 sub from_jsonfile{
@@ -168,6 +165,7 @@ sub get_song{
 }
 
 sub play_song{
+    refresh_bore_songs();
     is_songs_empty() and refresh_songs(10);
     my $song = get_song();
     to_jsonfile($song_file, $song);
