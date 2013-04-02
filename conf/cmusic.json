@@ -1,8 +1,34 @@
 {
-    "channel_list" : "http://fm.baidu.com",
-    "playlist" : "http://fm.baidu.com/dev/api/?tn=playlist&special=flash&prepend=&format=json",
-    "songs" : "http://music.baidu.com/data/music/fmlink?type=mp3",
-    "rate" : 128,
-    "default_channel_id" : "public_tuijian_billboard",
-    "play_cmd" : ["mplayer"]
+    baidu_music : {
+        channel_list : "http://fm.baidu.com",
+        playlist : "http://fm.baidu.com/dev/api/?tn=playlist&special=flash&prepend=&format=json",
+        songs : "http://music.baidu.com/data/music/fmlink?type=mp3",
+        default_channel_id : "public_tuijian_billboard",
+        rate : 128,
+    },
+    cmusic : {
+        daemonize : true,
+        runtime : {
+            pid : "cmusic.pid",
+            channel_id : "channel_id",
+            channels : "channels",
+            song : "song_detail",
+            like : "like_songs",
+            bore : "bore_songs",
+        },
+        log : {
+            info : "cmusic.log",
+            error : "cmusic.err",
+        },
+    },
+    player : {
+        cmd : [ "mplayer", "-msglevel", "all=1" ],
+        runtime : {
+            pid : "player.pid",
+        },
+        log : {
+            info : "player.log",
+            error : "player.err",
+        },
+    },
 }

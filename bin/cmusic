@@ -20,54 +20,67 @@ use Data::Dumper;
 our (
     $channel_id,
     $config,
-    $channel_file,
-    $channel_id_file,
-    $pid_file,
-    $song_file,
-    $like_file,
-    $bore_file,
     %songs,
     %bore_songs,
+    $runtime_path,
     @playlist,
     $player_pid
 );
 
 sub init{
     # Set .cmusic directory
-    my $user_path = "$ENV{HOME}/.cmusic/";
-    -d $user_path or mkdir $user_path;
-    (
-        $channel_file,
-        $channel_id_file,
-        $song_file,
-        $like_file,
-        $bore_file,
-        $pid_file
-    ) = map { "$user_path/$_" } qw(channels channel_id song_detail like_songs bore_songs cmusic.pid);
+    $runtime_path = "$ENV{HOME}/.cmusic/";
 
     # Read config
     $config = from_jsonfile('conf/cmusic.json');
 
     # Set channel id
-    $channel_id = file_get_contents($channel_id_file);
-    $channel_id or $channel_id = $config->{default_channel_id};
+    $channel_id = from_runtime('cmusic.runtime.channel_id')
+    or $channel_id = get_conf('baidu_music.default_channel_id');
+}
+
+sub get_conf{
+    my ($key) = @_;
+    my $conf = $config;
+    for (split('\.', $key)){
+        $conf = $conf->{$_};
+    }
+    return $conf;
+}
+
+sub get_runtime_file{
+    return "$runtime_path/" . get_conf(@_);
 }
 
 sub refresh_bore_songs{
-    my $bore = from_jsonfile($bore_file);
+    my $bore = from_runtime('cmusic.runtime.bore');
     %bore_songs = map { ($_, $bore->{$_}) } keys %$bore;
 }
 
 sub from_jsonfile{
-    my ($file) = @_;
-    my $json = file_get_contents($file) or return undef;
-    return JSON->new->utf8->decode($json);
+    my $json = file_get_contents(@_) or return undef;
+    return JSON->new->utf8->relaxed->allow_barekey->allow_singlequote->allow_nonref->decode($json);
 }
 
 sub to_jsonfile{
     my ($file, $perl_scalar) = @_;
-    my $json = JSON->new->utf8->encode($perl_scalar);
+    my $json = JSON->new->utf8->allow_nonref->encode($perl_scalar);
     file_put_contents($file, $json);
+}
+
+sub from_runtime{
+    return from_jsonfile(get_runtime_file(@_));
+}
+
+sub to_runtime{
+    my ($conf, $perl_scalar) = @_;
+    my $file = get_runtime_file($conf);
+    to_jsonfile($file, $perl_scalar);
+}
+
+sub rm_runtime{
+    my $file = get_runtime_file(@_);
+    unlink($file);
 }
 
 sub file_get_contents{
@@ -90,9 +103,10 @@ sub file_put_contents{
 
 sub set_channel{
     my ($index) = @_;
-    my $channel = from_jsonfile($channel_file) or refresh_channel();
+    my $channel = from_runtime('cmusic.runtime.channels');
+    $channel or $channel = refresh_channel();
     $channel_id = $channel->{channel_list}->[$index]->{channel_id};
-    file_put_contents($channel_id_file, $channel_id);
+    to_runtime('cmusic.runtime.channel_id', $channel_id);
 }
 
 sub http_get{
@@ -109,16 +123,16 @@ sub http_get{
 }
 
 sub refresh_channel{
-    my $html = http_get($config->{channel_list});
+    my $html = http_get(get_conf('baidu_music.channel_list'));
     ($html) = grep(/rawChannelList/, split("\n", $html));
     my ($json) = $html =~ m/(\{.*\})/;
-    file_put_contents($channel_file, $json);
+    file_put_contents(get_runtime_file('cmusic.runtime.channels'), $json);
     my $channel = JSON->new->utf8->decode($json);
     return $channel;
 }
 
 sub refresh_playlist{
-    my $json = http_get($config->{playlist}, {
+    my $json = http_get(get_conf('baidu_music.playlist'), {
         id => $channel_id
     });
     my $data = JSON->new->utf8->decode($json);
@@ -151,8 +165,8 @@ sub refresh_songs{
     my ($count) = @_;
     is_playlist_empty($count) and refresh_playlist();
     my $song_ids = join(',', get_playlist($count));
-    my $json = http_get($config->{songs}, {
-        rate => $config->{rate},
+    my $json = http_get(get_conf('baidu_music.songs'), {
+        rate => get_conf('baidu_music.rate'),
         songIds => $song_ids
     });
     my $data = JSON->new->utf8->decode($json);
@@ -176,7 +190,7 @@ sub play_song{
     refresh_bore_songs();
     is_songs_empty() and refresh_songs(10);
     my $song = get_song();
-    to_jsonfile($song_file, $song);
+    to_runtime('cmusic.runtime.song', $song);
     if (!is_bore_song($song)){
         _player($song->{showLink});
     }
@@ -190,11 +204,17 @@ sub is_bore_song{
 
 sub _player{
     my ($url) = @_;
-    my $cmd = $config->{play_cmd};
+    my $cmd = get_conf('player.cmd');
     $player_pid = fork();
     if ($player_pid > 0){
+        to_runtime('player.runtime.pid', $player_pid);
         wait;
     } elsif ($player_pid == 0){
+        reopen_std(
+            '/dev/null',
+            get_runtime_file('player.log.info'),
+            get_runtime_file('player.log.error')
+        );
         exec(@$cmd, $url);
     }
 }
@@ -219,31 +239,31 @@ sub main{
 
 sub like{
     my $song = check_song_file("Which song do you like?");
-    append_song_file($like_file, $song);
+    append_song_file('cmusic.runtime.like', $song);
     printf("We like %s - %s\n", encode_utf8($song->{songName}), encode_utf8($song->{artistName}));
 }
 
 sub bore{
     my $song = check_song_file("Which song bored you?");
-    append_song_file($bore_file, $song);
+    append_song_file('cmusic.runtime.bore', $song);
     printf("Never play %s - %s\n", encode_utf8($song->{songName}), encode_utf8($song->{artistName}));
     refresh_bore_songs();
-    play();
+    get_player_pid() and play();
 }
 
 sub append_song_file{
-    my ($file, $one) = @_;
-    my $songs = from_jsonfile($file);
+    my ($conf, $one) = @_;
+    my $songs = from_runtime($conf);
     $songs->{$one->{songId}} = {
         name   => $one->{songName},
         artist => $one->{artistName}
     };
-    to_jsonfile($file, $songs);
+    to_runtime($conf, $songs);
 }
 
 sub check_song_file{
     my ($msg) = @_;
-    my $song = from_jsonfile($song_file);
+    my $song = from_runtime('cmusic.runtime.song');
     if (!$song){
         print "$msg\n";
         exit 1;
@@ -281,16 +301,16 @@ sub list{
 sub play{
     @_ and set_channel(@_);
     stop();
-    daemon();
-    file_put_contents($pid_file, $$);
+    get_conf('cmusic.daemonize') and daemon();
+    to_runtime('cmusic.runtime.pid', $$);
     while (1){
         play_song();
     }
 }
 
 sub get_player_pid{
-    my $pid = file_get_contents($pid_file);
-    return (kill(0, $pid)) ? $pid : 0;
+    my $pid = from_runtime('cmusic.runtime.pid');
+    return ($pid && kill(0, $pid)) ? $pid : 0;
 }
 
 sub stop{
@@ -301,7 +321,8 @@ sub stop{
 }
 
 sub kill_and_exit{
-    $player_pid and kill(SIGTERM, $player_pid);
+    $player_pid and kill(SIGTERM, $player_pid) and rm_runtime('player.runtime.pid');
+    rm_runtime('cmusic.runtime.pid');
     exit(0);
 }
 
@@ -321,20 +342,27 @@ sub help{
 
 sub daemon{
     my $pid = fork();
-    if ($pid == 0){ 
-        #umask 0;
-        POSIX::setsid();
-        close STDIN;
-        close STDOUT;
-        close STDERR;
-        open STDIN, '/dev/null';
-        open STDOUT, '+>/dev/null';
-        open STDERR, '+>/dev/null';
-    } elsif ($pid > 0) {
+    if ($pid > 0) {
         exit 0;
-    } else {
+    } elsif ($pid < 0) {
         exit 1;
     }
+    POSIX::setsid();
+    reopen_std(
+        '/dev/null',
+        get_runtime_file('cmusic.log.info'),
+        get_runtime_file('cmusic.log.error')
+    );
+}
+
+sub reopen_std{
+    my ($in, $out, $err) = @_;
+    close STDIN;
+    close STDOUT;
+    close STDERR;
+    open STDIN, '<', $in;
+    open STDOUT, '+>', $out;
+    open STDERR, '+>', $err;
 }
 
 init();

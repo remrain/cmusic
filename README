@@ -19,18 +19,21 @@ First, set your player
 $ cd cmusic
 $ vi conf/cmusic.json
 
-If you do not have mplayer, set you player by modify play_cmd, example:
-"play_cmd" : ["player", "-mp3", "-url"]
+If you do not have mplayer, set you player by modify 'player.cmd', example:
+player : {
+    "cmd" : ["player", "-mp3", "-url"]
+}
 
-And you can set mp3 rate by modify 'songs', example:
-"songs" : "http://music.baidu.com/data/music/fmlink?type=mp3&rate=64&songIds="
+And you can set mp3 rate by modify 'baidu_music.rate', example:
+baidu_music : {
+    rate : 320
+}
 
 
 Then add cmusic/bin to PATH
 
 $ PATH=$PATH:/your/path/to/cmusic/bin
 $ echo "PATH=$PATH:/your/path/to/cmusic/bin" >> ~/.bash_profile
-
 
 
 
@@ -44,6 +47,7 @@ $ cmusic show                      # show name, artist, etc of current song
 $ cmusic play                      # play next song
 $ cmusic bore                      # current song is boring, do not play it any more
 $ cmusic stop                      # stop player
+$ ls $HOME/.cmusic                 # cmusic write temp file here
 
 
 
