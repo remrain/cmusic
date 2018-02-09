@@ -59,7 +59,7 @@ sub refresh_bore_songs{
 
 sub from_jsonfile{
     my $json = file_get_contents(@_) or return undef;
-    return JSON->new->utf8->relaxed->allow_barekey->allow_singlequote->allow_nonref->decode($json);
+    return JSON->new->utf8->relaxed->allow_nonref->decode($json);
 }
 
 sub to_jsonfile{
@@ -112,7 +112,7 @@ sub set_channel{
 sub http_get{
     my ($url, $param) = @_;
     my $ua = LWP::UserAgent->new;
-    $ua->agent('cmusic 2.0');
+    $ua->agent('cmusic 2.0(curl/7.37.1)');
     $ua->timeout(10);
     $ua->env_proxy;
     while (my ($key, $value) = each %$param){
